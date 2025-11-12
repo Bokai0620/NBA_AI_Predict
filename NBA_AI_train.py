@@ -2,16 +2,17 @@
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report,roc_curve, roc_auc_score
 from xgboost import XGBClassifier
 import matplotlib.pyplot as plt
 import seaborn as sns
 import shap
 import os
+import joblib
+saving_file = "regular_season/XGBoost_image"#檔案儲存名稱
 #======================================================================
-
-df = pd.read_csv("D:/AI_prediction/python_program/program1/new_all_teams_data.csv", encoding="utf-8-sig")
+df = pd.read_csv(r"D:\AI_prediction\python_program\program1\NBA_2021_to_2024_regular_season.csv", encoding="utf-8-sig")
 df = np.round(df, 3) # 改變資料只到小數第三位
 
 X = df.drop(columns=["result"], axis=1)  # 特徵欄位，axis=1(欄位)刪掉result欄位。
@@ -25,23 +26,54 @@ X_train, X_test, y_train, y_test = train_test_split(
 #===================================================================================
 
 #================================建立模型===============================
-xgb_model = XGBClassifier(
+# 建立基本模型
+xgb_model = XGBClassifier(objective='binary:logistic', eval_metric='logloss', random_state=42)
+
+# 定義要嘗試的參數組合
+param_grid = {
+    'n_estimators': [100, 200],    # 樹的數量
+    'max_depth': [3, 5, 7],        # 樹深度(層數)
+    'learning_rate': [0.01, 0.1],  # 學習率
+    'subsample': [0.8, 1.0],       #決定每棵樹訓練時使用的樣本比例(樣本抽樣。例:勇士隊...)
+    'colsample_bytree': [0.8, 1.0] #控制每棵樹訓練時隨機選取特徵的比例。(特徵抽樣。例:投球數、失誤...)
+}
+
+# 建立 GridSearchCV 物件
+grid_search = GridSearchCV(
+    estimator=xgb_model,      # 要調的模型
+    param_grid=param_grid,    # 要嘗試的參數組合
+    cv=5,                     # 使用 5 折交叉驗證
+    scoring='accuracy',       # 用準確率評估
+    n_jobs=-1,                # 用所有 CPU 核心加速(因為多核心需跑多個資料所以需要temp暫存資料夾來存東西，但原本的temp因為在中文路徑下會出錯，所以指定新的暫存資料夾路徑給temp_folder)
+    verbose=2                 # 顯示進度
+)
+
+# 開始搜尋最佳參數
+temp_folder = r"D:\temp_joblib"  # 全英文路徑
+with joblib.parallel_backend('loky', temp_folder=temp_folder):
+    grid_search.fit(X_train, y_train)
+
+# 顯示最佳結果
+print("最佳參數組合：", grid_search.best_params_)
+
+# 取出最佳參數
+best_params = grid_search.best_params_
+
+xgb_best_model = XGBClassifier(
     objective='binary:logistic',  # 二元分類
-    eval_metric='logloss',        # 損失函數
-    n_estimators=100,             # 樹的數量
-    max_depth=5,                  # 樹深度(層數)
-    learning_rate=0.1,            # 學習率
-    random_state=42
+    eval_metric='logloss',        # 損失函數           
+    random_state=42,              # 隨機性種子
+    **best_params                 # 把最佳參數傳入
 )
 #======================================================================
 
 #================================訓練模型===============================
-xgb_model.fit(X_train, y_train)
+xgb_best_model.fit(X_train, y_train)
 #======================================================================
 
 #================================印出資訊======================================
 # 預測
-y_pred = xgb_model.predict(X_test)
+y_pred = xgb_best_model.predict(X_test)
 
 # 準確率
 acc = accuracy_score(y_test, y_pred)
@@ -56,7 +88,7 @@ print(classification_report(y_test, y_pred, digits=4))
 #=============================================================================
 
 #================================5-fold cross-validation======================
-scores = cross_val_score(xgb_model, X, y, cv=5, scoring='accuracy')
+scores = cross_val_score(xgb_best_model, X, y, cv=5, scoring='accuracy')
 print("每一 fold 的準確率:", scores)
 print("平均準確率:", np.mean(scores))
 #=============================================================================
@@ -68,7 +100,8 @@ plt.title("Confusion Matrix")
 plt.xlabel("Predicted Label")
 plt.ylabel("True Label")
 plt.tight_layout()
-plt.savefig(("XGBoost_image/confusion_matrix.png"), dpi=150)
+os.makedirs(saving_file, exist_ok=True)  # 若資料夾不存在會自動建立
+plt.savefig(os.path.join(saving_file, "confusion_matrix.png"), dpi=150)
 plt.close()
 print("Confusion matrix saved as confusion_matrix.png\n")
 #==============================================================
@@ -81,13 +114,14 @@ plt.xlabel("Fold")
 plt.ylabel("Accuracy")
 plt.ylim(0,1)      # 設定 y 軸的範圍（上下限）
 plt.tight_layout() # 自動調整圖表的空間配置
-plt.savefig("XGBoost_image/cross_val_accuracy.png", dpi=150)
+os.makedirs(saving_file, exist_ok=True)  # 若資料夾不存在會自動建立
+plt.savefig(os.path.join(saving_file, "cross_val_accuracy.png"), dpi=150)
 plt.close()
 print("Cross-validation plot saved as cross_val_accuracy.png\n")
 #=========================================================
 
 #==================================ROC Curve圖=====================================
-y_prob = xgb_model.predict_proba(X_test)[:, 1] # y_prob模型預測贏的機率
+y_prob = xgb_best_model.predict_proba(X_test)[:, 1] # y_prob模型預測贏的機率
 
 fpr, tpr, thresholds = roc_curve(y_test, y_prob)
 auc = roc_auc_score(y_test, y_prob)
@@ -100,13 +134,14 @@ plt.ylabel("True Positive Rate")
 plt.title("ROC Curve")
 plt.legend() # 顯示圖例
 plt.tight_layout() # 自動調整圖表的空間配置
-plt.savefig("XGBoost_image/ROC_curve.png", dpi=150)
+os.makedirs(saving_file, exist_ok=True)  # 若資料夾不存在會自動建立
+plt.savefig(os.path.join(saving_file, "ROC_curve.png"), dpi=150)
 plt.close()
 print("ROC_curve plot saved as ROC_curve.png\n")
 #==============================================================================
 
 #==================================特徵重要度圖=====================================
-importance = xgb_model.feature_importances_ # 取得每個特徵的重要度分數（0~1之間）
+importance = xgb_best_model.feature_importances_ # 取得每個特徵的重要度分數（0~1之間）
 features = X.columns # 取得特徵名稱
 
 # 排序後畫圖
@@ -117,13 +152,14 @@ plt.bar(range(len(features)), importance[indices]) # range(len(features))特徵�
 plt.xticks(range(len(features)), features[indices], rotation=90) # range(len(features))特徵數量 、 features[indices]由特徵權重大到小排序到X軸(特徵名稱) 、 rotation=90把文字旋轉 90 度（直立顯示）
 plt.title("XGBoost Feature Importance")
 plt.tight_layout()
-plt.savefig("XGBoost_image/Feature_importance.png", dpi=150)
+os.makedirs(saving_file, exist_ok=True)  # 若資料夾不存在會自動建立
+plt.savefig(os.path.join(saving_file, "Feature_importance.png"), dpi=150)
 plt.close()
 print("Feature_importance plot saved as Feature_importance.png\n")
 #=================================================================================
 
 #==================================SHAP解釋=====================================
-explainer = shap.TreeExplainer(xgb_model)
+explainer = shap.TreeExplainer(xgb_best_model)
 shap_values = explainer.shap_values(X_test)
 
 # ----------------------------
@@ -133,7 +169,8 @@ shap_values = explainer.shap_values(X_test)
 # ----------------------------
 plt.figure()
 shap.summary_plot(shap_values, X_test, plot_type="bar", show=False)  # show=False 不直接顯示
-plt.savefig("XGBoost_image/shap_summary_bar.png", dpi=150, bbox_inches='tight')     # 存成 PNG
+os.makedirs(saving_file, exist_ok=True)  # 若資料夾不存在會自動建立
+plt.savefig(os.path.join(saving_file, "shap_summary_bar.png"), dpi=150, bbox_inches='tight')
 plt.close()  # 釋放圖形資源
 print("shap_summary_bar plot saved as shap_summary_bar.png\n")
 
@@ -142,7 +179,8 @@ print("shap_summary_bar plot saved as shap_summary_bar.png\n")
 # ----------------------------
 plt.figure()
 shap.summary_plot(shap_values, X_test, show=False)
-plt.savefig("XGBoost_image/shap_summary_dot.png", dpi=150, bbox_inches='tight')
+os.makedirs(saving_file, exist_ok=True)  # 若資料夾不存在會自動建立
+plt.savefig(os.path.join(saving_file, "shap_summary_dot.png"), dpi=150, bbox_inches='tight')
 plt.close()  # 釋放圖形資源
 print("shap_summary_dot plot saved as shap_summary_dot.png\n")
 #===============================================================================
