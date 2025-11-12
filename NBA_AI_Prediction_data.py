@@ -74,12 +74,14 @@ def try_get_with_retries(driver, url, max_retries=3, wait_between=3):
             # 重啟 driver（回傳新的 driver 物件）
             driver = create_driver()
         except urllib3.exceptions.ReadTimeoutError as re:
-            # 這是你在 traceback 中看到的底層例外
             print(f"[urllib3 ReadTimeoutError] 第{tries}次載入 {url}: {re}")
+            # driver 壞掉了 → 強制重啟
             try:
-                driver.execute_script("window.stop();")
+                driver.quit()
             except Exception:
                 pass
+            time.sleep(1)
+            driver = create_driver()
         except Exception as e:
             # 捕捉其他不可預期的錯誤，記錄後嘗試重啟 driver
             print(f"[Exception] 第{tries}次載入 {url} 發生例外: {type(e).__name__}: {e}")
@@ -99,7 +101,7 @@ def try_get_with_retries(driver, url, max_retries=3, wait_between=3):
 driver = create_driver()
 
 # 開啟網站
-driver.get("https://www.basketball-reference.com/boxscores/?month=1&day=1&year=2021")
+driver.get("https://www.basketball-reference.com/boxscores/?month=10&day=18&year=2022")
 
 count = 0 #網頁計數
 all_teams_data = []  # 存所有隊伍的資料
@@ -113,14 +115,10 @@ day_select_text = "0" # 先宣告日(例: 1)
 #選擇期間內的資料
 while True:
     #找出當前年份
-    year_select_elem = driver.find_element(By.ID, "year") #抓取下拉式選單格子
+    year_select_elem = WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.ID, "year"))) #抓取下拉式選單格子
     year_select = Select(year_select_elem) #改成Select的物件這樣才能利用first_selected_option.text此方法
     year_select_text = year_select.first_selected_option.text
     print(year_select_text) #string型態
-    # 立即檢查；如果已經到 2025，就不要處理 2025，直接結束
-    if year_select_text == "2025":
-        print("已到 2025，結束爬取。")
-        break
 
     #找出當前月份
     month_select_elem = driver.find_element(By.ID, "month") #抓取下拉式選單格子
@@ -133,6 +131,11 @@ while True:
     day_select = Select(day_select_elem) #改成Select的物件這樣才能利用first_selected_option.text此方法
     day_select_text = day_select.first_selected_option.text
     print(day_select_text) #string型態
+    
+    #判斷式需要抓到的結束時間點
+    if month_select_text == "April" and day_select_text == "10":
+        print("已爬取完此賽季例行賽資料。")
+        break
     
     count += 1
     # 抓取所有 Box Score 連結
@@ -301,7 +304,7 @@ print(df.head())
 
 print("正在存成CSV檔...")
 # 存成 CSV
-df.to_csv("D:/AI_prediction/python_program/program1/new_all_teams_data.csv", index=False, encoding="utf-8-sig")
+df.to_csv("D:/AI_prediction/python_program/program1/regular_season2.csv", index=False, encoding="utf-8-sig")
     
 # 關閉瀏覽器
 driver.quit()
